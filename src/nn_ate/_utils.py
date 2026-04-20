@@ -24,7 +24,6 @@ def get_df_for_prediction(
     if save is not None: df.to_csv(save, index=False)
     return df
 
-
 def quick_check_dataset(ds_bio: Dataset, ds_bilou, tokenizer: TokenizersBackend):
     for i, (bio, bilou) in enumerate(zip(ds_bio, ds_bilou)):
         input_ids = bio['input_ids']

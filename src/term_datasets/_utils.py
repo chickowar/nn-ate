@@ -4,10 +4,10 @@ from transformers import TokenizersBackend
 
 from common.utils import clr
 from term_datasets.CL_RuTerm3 import SPECIAL_TOKEN_LABEL_ID, BIO2ID
-from term_datasets._types import CLRuTerm3TokenizedElement
+from term_datasets._types import TokenizedDatasetElement
 
 
-def read_tokenized_element(el: CLRuTerm3TokenizedElement,
+def read_tokenized_element(el: TokenizedDatasetElement,
                            tokenizer: TokenizersBackend,
                            skip_special_tokens: bool = True,
                            highlight_in_text: bool = True,

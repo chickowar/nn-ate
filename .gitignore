@@ -278,3 +278,4 @@ pyrightconfig.json
 /src/nn_ate/outputs/
 /poking.ipynb
 /src/nn_ate/runs/
+chernovik.py
