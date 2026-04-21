@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Callable, Any
+from typing import Callable, Any, Generator
 
 from datasets import Dataset, DatasetDict
 from transformers import TokenizersBackend, BatchEncoding, AutoTokenizer
@@ -12,29 +12,34 @@ from term_datasets.CL_RuTerm3 import (
     get_flat_terms,
     tokenize_batch_BIO, tokenize_batch_span_classification, tokenize_span_dataset,
 )
-from term_datasets._types import CLRuTerm3OriginalJSON
+from term_datasets._types import CLRuTerm3OriginalJSON, RawDatasetElement
 from term_datasets.text_processing import TextProcessor
 
 
 def get_raw_dataset(jsonl_path: Path | str, flat: bool = False) -> Dataset:
     """
-    Returns a 'raw' dataset. Columns are listed below.
+    Returns a RawDataset. Columns are listed below.
 
     text: texts
 
     label: a list of term boundaries (by symbol)
 
+    candidates: NotRequired[a list of candidate term boundaries (by symbol)]
+
     id: a list of ids from original JSON file (not needed actually)
+
+
 
     :param jsonl_path:
     :param flat:
-    :return: Dataset({'text': str, 'label': list[list[int]], 'id': str})
+    :return: Dataset[RawDatasetElement]
     """
     texts: list[str] = []
     labels: list[list[list[int]]] = []
     ids: list[str] = []
+    candidates: list[list[list[int]]] = []
 
-    with open(jsonl_path, "r", encoding="utf-8") as f:
+    with open(jsonl_path, "r", encoding="utf-8-sig") as f:
         for line in f:
             js: CLRuTerm3OriginalJSON = json.loads(line)
             labels.append(js["label"])
@@ -42,8 +47,15 @@ def get_raw_dataset(jsonl_path: Path | str, flat: bool = False) -> Dataset:
                 labels[-1] = get_flat_terms(labels[-1])
             texts.append(js["text"])
             ids.append(js["id"])
-
-    return Dataset.from_dict({"text": texts, "label": labels, "id": ids})
+            if 'candidate_label' in js:
+                candidates.append(js["candidate_label"])
+    return Dataset.from_dict({
+        "id": ids,
+        "text": texts,
+        "label": labels,
+    } | {
+        "candidates": candidates
+    } if candidates else {})
 
 
 def get_tokenized_dataset(
@@ -78,6 +90,7 @@ def get_train_test_split_tokenized_dataset(
 
 def get_span_dataset(
         jsonl_path: Path | str | None = None,
+        has_preprocessed_candidates: bool = False,
         flat: bool = False,
         **generator_kwargs
 ) -> Dataset:
@@ -86,18 +99,27 @@ def get_span_dataset(
     :param jsonl_path: путь к jsonl (если в generator_kwargs не указан raw_dataset)
     :param flat:
     :param generator_kwargs: аргументы для generator_span_dataset_element
+    :keyword max_words_per_ngram: int = 7
+    :keyword negative_ratio: float | None = 3.0,
+    :keyword seed: int = 42,
+    :keyword text_processor: TextProcessor | None = None,
     :return: Dataset[SpanDatasetElement]
     """
-    if jsonl_path is None and "raw_dataset" not in generator_kwargs:
-        raise TypeError("Either pass a dataset as a keyword or jsonl_path")
-    elif jsonl_path is not None:
+    if jsonl_path is None:
+        if "raw_dataset" not in generator_kwargs:
+            raise TypeError("Either pass a dataset as a keyword or jsonl_path")
+    else:
         generator_kwargs["raw_dataset"] = get_raw_dataset(jsonl_path, flat=flat)
+    if has_preprocessed_candidates and "candidates" not in generator_kwargs["raw_dataset"].column_names:
+        raise TypeError("No jsonl_path with preprocessed candidates provided")
+    generator_kwargs["has_preprocessed_candidates"] = has_preprocessed_candidates
     return Dataset.from_generator(generator_span_dataset_element, gen_kwargs=generator_kwargs)
 
 
 def get_tokenized_span_dataset(
         jsonl_path: Path | str,
         tokenizer: TokenizersBackend,
+        has_preprocessed_candidates: bool = False,
         max_words_per_ngram: int = 7,
         max_pair_length: int = 512,
         batch_size: int = 1000,
@@ -108,10 +130,11 @@ def get_tokenized_span_dataset(
 ) -> Dataset:
     span_dataset = get_span_dataset(
         jsonl_path=jsonl_path,
+        has_preprocessed_candidates=has_preprocessed_candidates,
+        flat=flat,
         max_words_per_ngram=max_words_per_ngram,
         negative_ratio=negative_ratio,
         seed=seed,
-        flat=flat,
         text_processor=text_processor,
     )
     return tokenize_span_dataset(span_dataset, tokenizer, max_pair_length, batch_size)
@@ -119,6 +142,7 @@ def get_tokenized_span_dataset(
 def get_train_test_split_tokenized_span_dataset(
         jsonl_path: Path | str,
         tokenizer: TokenizersBackend,
+        has_preprocessed_candidates: bool | None = None,
         max_words_per_ngram: int = 7,
         max_pair_length: int = 512,
         batch_size: int = 1000,
@@ -135,8 +159,12 @@ def get_train_test_split_tokenized_span_dataset(
         seed=seed,
     )
 
+    if has_preprocessed_candidates is None:
+        has_preprocessed_candidates = 'candidates' in raw_dataset['train'].column_names
+
     train_dataset= get_span_dataset(
         raw_dataset=raw_dataset["train"],
+        has_preprocessed_candidates=has_preprocessed_candidates,
         max_words_per_ngram=max_words_per_ngram,
         negative_ratio=train_negative_ratio,
         seed=seed,
@@ -144,6 +172,7 @@ def get_train_test_split_tokenized_span_dataset(
     )
     eval_dataset = get_span_dataset(
         raw_dataset=raw_dataset["test"],
+        has_preprocessed_candidates=has_preprocessed_candidates,
         max_words_per_ngram=max_words_per_ngram,
         negative_ratio=eval_negative_ratio,
         seed=seed + 1,
@@ -168,7 +197,7 @@ def get_train_test_split_tokenized_span_dataset(
 
 
 def main():
-    from CL_RuTerm3 import CLRUTERM3_TRAIN1_PATH, MODEL_NAME, DEFAULT_TEXT_PROCESSOR
+    from CL_RuTerm3 import CLRUTERM3_TRAIN1_PATH, MODEL_NAME, DEFAULT_TEXT_PROCESSOR, CLRUTERM3_TRAIN1_CANDIDATES_PATH
 
     def get_tokenizer(model_name=MODEL_NAME) -> TokenizersBackend:
         return AutoTokenizer.from_pretrained(model_name)
@@ -176,18 +205,21 @@ def main():
     tokenizer: TokenizersBackend = get_tokenizer()
 
     train, eval = get_train_test_split_tokenized_span_dataset(
-        jsonl_path=CLRUTERM3_TRAIN1_PATH,
+        jsonl_path=CLRUTERM3_TRAIN1_CANDIDATES_PATH,
         tokenizer=tokenizer,
-        max_words_per_ngram=7,
+        has_preprocessed_candidates=True,
         max_pair_length=512,
-        train_negative_ratio=None,
-        eval_negative_ratio=None,
         batch_size=1000,
-        text_processor=DEFAULT_TEXT_PROCESSOR,
     )
 
-    print(train[0].keys())
-    print(*(f"{k}: {v}\n" for k, v in train[0].items()),sep='')
+    id1 = train[0]['id']
+    for row in train:
+        if row['id'] == id1:
+            print(f"{'':=^50}")
+            print(*(f"{k}: {v}" for k, v in row.items()),sep='\n')
+        else:
+            break
+
 
 if __name__ == "__main__":
     main()

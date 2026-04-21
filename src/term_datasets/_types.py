@@ -7,10 +7,12 @@ class CLRuTerm3OriginalJSON(TypedDict):
     label: list[list[int]]
     text: str
     keywords: str
+    candidate_label: NotRequired[list[list[int]]]
 
-class CLRuTerm3JSON(TypedDict):
+class RawDatasetElement(TypedDict):
     id: str
     label: list[list[int]] # list[tuple[int, int]]
+    candidates: NotRequired[list[list[int]]] # list[tuple[int, int]]
     text: str
 
 class TokenizedDatasetElement(TypedDict):

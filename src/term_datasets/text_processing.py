@@ -20,13 +20,6 @@ class TextProcessor:
     _left_boundary_chars = "\"'«„“([{"
     _right_boundary_chars = "\"'»”’)]}.,:;!?"
 
-    # one_letter = "йцкнгшщзхфвпрлдчсмтб"
-    #
-    # punctuation = str(filter(lambda x: x not in "%-+", punctuation + "-—”“„\n«»®‒"))
-    # end_sentence = "\n"
-    # strange_punctuation = "\"\'”“„"
-    # end_word = " /-—+"
-
     def split_sentences(self, text: str) -> list[TextSpan]:
         sentences: list[TextSpan] = []
         last_end = 0

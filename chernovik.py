@@ -1,42 +1,41 @@
-from term_datasets.CL_RuTerm3 import CLRUTERM3_TRAIN1_PATH, get_flat_terms, build_span_classification_dataset
-from term_datasets.CL_RuTerm3_getters import get_raw_dataset
+import json
+from transformers import AutoTokenizer
 
+from nn_ate.bert_getters import DEFAULT_MODEL
+from term_datasets.CL_RuTerm3 import (
+    CLRUTERM3_TRAIN1_CANDIDATES_PATH, CLRUTERM3_TEST1_PATH, CLRUTERM3_TEST23_PATH,
+)
+from term_datasets.CL_RuTerm3_getters import get_span_dataset, get_raw_dataset, get_tokenized_span_dataset
+from term_datasets._types import CLRuTerm3OriginalJSON
+from collections import defaultdict, Counter
 
-from collections import defaultdict
+tokenizer = AutoTokenizer.from_pretrained(DEFAULT_MODEL)
 
-raw_ds = get_raw_dataset(CLRUTERM3_TRAIN1_PATH)
-raw_terms = {row['id']: set((tuple(label) for label in row["label"])) for row in raw_ds}
+ds = get_tokenized_span_dataset(CLRUTERM3_TRAIN1_CANDIDATES_PATH, tokenizer=tokenizer, has_preprocessed_candidates=True)
+row = next(iter(ds))
+print(*(f"{k}: {v}" for k, v in row.items()), sep="\n")
 
-ds = build_span_classification_dataset(raw_ds, max_words_per_ngram=7)
-
-
-cnt = 0
-for row in ds:
-    row_id = row['id']
-    cand = row['candidate_text']
-    span = row['span_start'], row['span_end']
-    text = row['text']
-    label = row['label']
-    cnt += label
-    # print(f"{'':=^100}\n{row_id}\nCandidate: {cand:<30} | {span}\nText: {text}\nLabel: {'TERM' if label else 'NON-TERM'}\n")
-
-print(f"Примеров: {len(ds)}\nТерминов: {cnt}")
-print(f"Реальных терминов: {sum(len(x) for x in raw_terms.values())}")
-# cands: dict[str, set[tuple[int, int]]] = defaultdict(set)
+# with open(CLRUTERM3_TEST1_PATH, 'r', encoding='utf-8-sig') as f:
+#     data: list[CLRuTerm3OriginalJSON] = [json.loads(line) for line in f]
 #
-# for row in ds:
-#     _id = row['id']
-#     boundary = row['span_start'], row['span_end']
-#     cands[_id].add(boundary)
+# cnt = 0
+# s1 = set()
+# for i, js in enumerate(data):
+#     label = js['label']
+#     s = set()
+#     for st, en in label:
+#         if (st, en) not in s:
+#             s.add((st, en))
+#         else:
+#             cnt += 1
+#             s1.add((js['id'], js['text'][st:en], (st, en)))
 #
-# print("=========")
+# terms = [
+#     data[i]['text'][st: en] for i, spans in enumerate(map(lambda x: x['label'], data)) for st, en in spans
+# ]
 #
-# unincluded = {}
-# for _id, true_terms in raw_terms.items():
-#     _unincluded = true_terms - cands[_id]
-#     if _unincluded:
-#         print(f"{_id} : {_unincluded}")
-#         unincluded[_id] = _unincluded
-#
-# print(unincluded)
-# print(sum(len(terms) for terms in unincluded.values()))
+# term_lengths = list(map(
+#     len,
+#     map(str.split, terms)
+# ))
+# print(Counter(term_lengths))

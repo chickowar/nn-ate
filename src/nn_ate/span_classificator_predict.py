@@ -32,7 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def load_jsonl_dataset(path: Path) -> Dataset:
+def load_jsonl_dataset(path: Path) -> Dataset: # ЗАЧЕМ??!?!?!?! У нас уже есть raw dataset
     ids: list[str] = []
     texts: list[str] = []
     labels: list[list[list[int]]] = []

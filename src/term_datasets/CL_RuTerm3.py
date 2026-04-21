@@ -1,5 +1,3 @@
-import json
-from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Generator
 
@@ -20,6 +18,7 @@ SPAN_ID2LABEL: dict[int, str] = {v: k for k, v in SPAN_LABEL2ID.items()}
 SPECIAL_TOKEN_LABEL_ID: int = -100
 
 CLRUTERM3_TRAIN1_PATH: str = str(Path(__file__).parents[2] / 'data' / 'CL-RuTerm3' / 'original' / 'train_t1_v1.jsonl')
+CLRUTERM3_TRAIN1_CANDIDATES_PATH: str = str(Path(__file__).parents[2] / 'data' / 'CL-RuTerm3' / 'processed' / 'train_t1_candidates.jsonl')
 CLRUTERM3_TRAIN23_PATH: str = str(Path(__file__).parents[2] / 'data' / 'CL-RuTerm3' / 'original' / 'train_t23_v1.jsonl')
 CLRUTERM3_TEST23_PATH: str = str(
     Path(__file__).parents[2] / 'data' / 'CL-RuTerm3' / 'original' / 'test1_t12_full_v2.jsonl')
@@ -52,17 +51,45 @@ def get_flat_terms(terms: list[list[int]]) -> list[list[int]]:
     return flat_terms
 
 
-def build_span_classification_examples(
+def build_span_dataset_elements(
         text: str,
         labels: list[list[int]],
         sample_id: str,
+        preprocessed_candidates: list[list[int]] | None = None,
         max_words_per_ngram: int = 7,
         negative_ratio: float | None = 3.0,
         seed: int = 42,
         text_processor: TextProcessor | None = None,
 ) -> list[SpanDatasetElement]:
+    """
+    Builds SpanDatasetElements from RawDatasetElement's values
+    :param text:
+    :param labels:
+    :param sample_id: id (of annotation)
+    :param preprocessed_candidates: If provided - ignores all following parameters
+    :param max_words_per_ngram:
+    :param negative_ratio:
+    :param seed:
+    :param text_processor:
+    :return: A list of SpanDatasetElements
+    """
+
     processor = text_processor or DEFAULT_TEXT_PROCESSOR
-    term_spans: set[tuple[int, int]] = {tuple(boundary) for boundary in labels}
+    term_spans: set[tuple[int, int]] = {(st, en) for st, en in labels}
+    if preprocessed_candidates is not None:
+        candidate_spans: list[TextSpan] = [TextSpan(start=st, end=en, text=text[st: en]) for st, en in preprocessed_candidates]
+        examples: list[SpanDatasetElement] = [
+            {
+                "id": sample_id,
+                "text": text,
+                "candidate_text": candidate.text,
+                "span_start": candidate.start,
+                "span_end": candidate.end,
+                "label": int((candidate.start, candidate.end) in term_spans),
+            } for candidate in candidate_spans
+        ]
+        return examples
+
     candidate_spans: list[TextSpan] = [
         span
         for sentence in processor.split_sentences(text)
@@ -73,14 +100,13 @@ def build_span_classification_examples(
     negative_examples: list[SpanDatasetElement] = []
 
     for candidate in candidate_spans:
-        boundaries = (candidate.start, candidate.end)
         example: SpanDatasetElement = {
             "id": sample_id,
             "text": text,
             "candidate_text": candidate.text,
             "span_start": candidate.start,
             "span_end": candidate.end,
-            "label": int(boundaries in term_spans),
+            "label": int((candidate.start, candidate.end) in term_spans),
         }
         if example["label"] == 1:
             positive_examples.append(example)
@@ -107,20 +133,23 @@ def build_span_classification_examples(
 
 def generator_span_dataset_element(
         raw_dataset: Dataset,
+        has_preprocessed_candidates: bool = False,
         max_words_per_ngram: int = 7,
         negative_ratio: float | None = 3.0,
         seed: int = 42,
         text_processor: TextProcessor | None = None,
 ) -> Generator[SpanDatasetElement, None, None]:
     for row in raw_dataset:
-        yield from build_span_classification_examples(
+        yield from build_span_dataset_elements(
             text=row["text"],
             labels=row["label"],
             sample_id=row["id"],
+            preprocessed_candidates=None if not has_preprocessed_candidates else row["candidates"],
             max_words_per_ngram=max_words_per_ngram,
             negative_ratio=negative_ratio,
             seed=seed,
-            text_processor=text_processor)
+            text_processor=text_processor
+        )
 
 #
 # =========================== TOKENIZATION ===========================
