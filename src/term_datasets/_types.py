@@ -7,7 +7,7 @@ class CLRuTerm3OriginalJSON(TypedDict):
     label: list[list[int]]
     text: str
     keywords: str
-    candidate_label: NotRequired[list[list[int]]]
+    candidates: NotRequired[list[list[int]]]
 
 class RawDatasetElement(TypedDict):
     id: str

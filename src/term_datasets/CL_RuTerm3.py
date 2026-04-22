@@ -23,7 +23,7 @@ CLRUTERM3_TRAIN23_PATH: str = str(Path(__file__).parents[2] / 'data' / 'CL-RuTer
 CLRUTERM3_TEST23_PATH: str = str(
     Path(__file__).parents[2] / 'data' / 'CL-RuTerm3' / 'original' / 'test1_t12_full_v2.jsonl')
 CLRUTERM3_TEST1_PATH: str = str(
-    Path(__file__).parents[2] / 'data' / 'CL-RuTerm3' / 'processed' / 'test1_t12_full_v2_NO_CLASS.jsonl')
+    Path(__file__).parents[2] / 'data' / 'CL-RuTerm3' / 'processed' / 'test1_t1_candidates.jsonl') # with candidates
 
 MODEL_NAME: str = 'DeepPavlov/rubert-base-cased'
 DEFAULT_TEXT_PROCESSOR = TextProcessor()

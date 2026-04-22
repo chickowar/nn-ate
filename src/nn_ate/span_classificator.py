@@ -71,13 +71,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--has-preprocessed-candidates",
         dest="has_preprocessed_candidates",
         action="store_true",
-        help="Use candidate spans from JSONL candidate_label/candidates column.",
+        help="Use candidate spans from JSONL candidates/candidates column.",
     )
     candidate_group.add_argument(
         "--no-preprocessed-candidates",
         dest="has_preprocessed_candidates",
         action="store_false",
-        help="Ignore candidate_label/candidates column and build candidates locally.",
+        help="Ignore candidates/candidates column and build candidates locally.",
     )
     parser.set_defaults(has_preprocessed_candidates=None)
     parser.add_argument("--max-words-per-ngram", type=int, default=10)
@@ -427,7 +427,7 @@ def print_run_summary(
         print("archived_checkpoints: none")
     print(
         "candidate_source: "
-        f"{'preprocessed candidate_label/candidates' if has_preprocessed_candidates else 'local n-gram extraction'}"
+        f"{'preprocessed candidates/candidates' if has_preprocessed_candidates else 'local n-gram extraction'}"
     )
     print(
         f"train_size: {train_dataset.num_rows} | eval_size: {eval_dataset.num_rows} | "

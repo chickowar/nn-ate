@@ -13,7 +13,7 @@ from tqdm.auto import tqdm
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, DataCollatorWithPadding
 
 from term_datasets.CL_RuTerm3 import CLRUTERM3_TEST1_PATH
-from term_datasets.CL_RuTerm3_getters import get_span_dataset, tokenize_span_dataset
+from term_datasets.CL_RuTerm3_getters import get_raw_dataset, get_span_dataset, tokenize_span_dataset
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -23,6 +23,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model-path", type=Path, required=True)
     parser.add_argument("--dataset-path", type=Path, default=Path(CLRUTERM3_TEST1_PATH))
     parser.add_argument("--output-path", type=Path, required=True)
+    candidate_group = parser.add_mutually_exclusive_group()
+    candidate_group.add_argument(
+        "--has-preprocessed-candidates",
+        dest="has_preprocessed_candidates",
+        action="store_true",
+        help="Use candidate spans from JSONL candidates/candidates column.",
+    )
+    candidate_group.add_argument(
+        "--no-preprocessed-candidates",
+        dest="has_preprocessed_candidates",
+        action="store_false",
+        help="Ignore candidates/candidates column and build candidates locally.",
+    )
+    parser.set_defaults(has_preprocessed_candidates=None)
     parser.add_argument("--max-words-per-ngram", type=int, default=10)
     parser.add_argument("--max-length", type=int, default=384)
     parser.add_argument("--tokenize-batch-size", type=int, default=1000)
@@ -30,23 +44,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda"])
     return parser
-
-
-def load_jsonl_dataset(path: Path) -> Dataset: # ЗАЧЕМ??!?!?!?! У нас уже есть raw dataset
-    ids: list[str] = []
-    texts: list[str] = []
-    labels: list[list[list[int]]] = []
-
-    with path.open("r", encoding="utf-8-sig") as file:
-        for line in file:
-            if not line.strip():
-                continue
-            payload = json.loads(line)
-            ids.append(payload["id"])
-            texts.append(payload["text"])
-            labels.append(payload.get("label", []))
-
-    return Dataset.from_dict({"id": ids, "text": texts, "label": labels})
 
 
 def resolve_device(device_name: str) -> torch.device:
@@ -57,6 +54,21 @@ def resolve_device(device_name: str) -> torch.device:
             raise RuntimeError("CUDA was requested but is not available.")
         return torch.device("cuda")
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def resolve_model_path(model_path: Path) -> str:
+    resolved_path = model_path.expanduser()
+    if resolved_path.exists():
+        if not resolved_path.is_dir():
+            raise NotADirectoryError(f"Model path is not a directory: {resolved_path}")
+        return str(resolved_path.resolve())
+
+    raise FileNotFoundError(
+        "Model path does not exist: "
+        f"{resolved_path}. "
+        "If you mean a local checkpoint, pass the real directory path "
+        "(for example, src/nn_ate/outputs/.../best)."
+    )
 
 
 class SpanPredictionCollator:
@@ -89,16 +101,26 @@ class SpanPredictionCollator:
 def write_predictions(
     output_path: Path,
     raw_dataset: Dataset,
-    positive_spans_by_id: dict[str, set[tuple[int, int]]],
+    candidate_scores_by_id: dict[str, list[tuple[int, int, float]]],
+    threshold: float,
 ) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as file:
         for row in raw_dataset:
-            spans = sorted(positive_spans_by_id.get(row["id"], set()))
+            candidate_scores = candidate_scores_by_id.get(row["id"], [])
+            candidates = [[start, end] for start, end, _ in candidate_scores]
+            candidate_probabilities = [probability for _, _, probability in candidate_scores]
+            positive_spans = [
+                [start, end]
+                for start, end, probability in candidate_scores
+                if probability >= threshold
+            ]
             payload = {
                 "id": row["id"],
                 "text": row["text"],
-                "label": [[start, end] for start, end in spans],
+                "label": positive_spans,
+                "candidates": candidates,
+                "candidate_probabilities": candidate_probabilities,
             }
             file.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
@@ -106,16 +128,23 @@ def write_predictions(
 def main() -> None:
     args = build_parser().parse_args()
     device = resolve_device(args.device)
+    model_path = resolve_model_path(args.model_path)
 
-    raw_dataset = load_jsonl_dataset(args.dataset_path)
+    raw_dataset = get_raw_dataset(args.dataset_path, flat=False)
+    if args.has_preprocessed_candidates is None:
+        has_preprocessed_candidates = "candidates" in raw_dataset.column_names
+    else:
+        has_preprocessed_candidates = args.has_preprocessed_candidates
+
     span_dataset = get_span_dataset(
         raw_dataset=raw_dataset,
+        has_preprocessed_candidates=has_preprocessed_candidates,
         max_words_per_ngram=args.max_words_per_ngram,
         negative_ratio=None,
     )
 
-    tokenizer = AutoTokenizer.from_pretrained(args.model_path)
-    model = AutoModelForSequenceClassification.from_pretrained(args.model_path)
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
+    model = AutoModelForSequenceClassification.from_pretrained(model_path)
     model.to(device)
     model.eval()
 
@@ -133,7 +162,7 @@ def main() -> None:
         collate_fn=SpanPredictionCollator(tokenizer),
     )
 
-    positive_spans_by_id: dict[str, set[tuple[int, int]]] = defaultdict(set)
+    candidate_scores_by_id: dict[str, list[tuple[int, int, float]]] = defaultdict(list)
     with torch.inference_mode():
         for batch in tqdm(dataloader, desc="Predicting spans"):
             metadata_ids = batch.pop("id")
@@ -145,15 +174,19 @@ def main() -> None:
             probabilities = torch.softmax(logits, dim=-1)[:, 1].detach().cpu().tolist()
 
             for doc_id, start, end, probability in zip(metadata_ids, metadata_starts, metadata_ends, probabilities):
-                if probability >= args.threshold:
-                    positive_spans_by_id[doc_id].add((int(start), int(end)))
+                candidate_scores_by_id[doc_id].append((int(start), int(end), float(probability)))
 
     write_predictions(
         output_path=args.output_path,
         raw_dataset=raw_dataset,
-        positive_spans_by_id=positive_spans_by_id,
+        candidate_scores_by_id=candidate_scores_by_id,
+        threshold=args.threshold,
     )
     print(f"Saved predictions to {args.output_path}")
+    print(
+        "Candidate source:",
+        "preprocessed candidates/candidates" if has_preprocessed_candidates else "local n-gram extraction",
+    )
 
 
 if __name__ == "__main__":
