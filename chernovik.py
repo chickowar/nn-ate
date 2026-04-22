@@ -17,7 +17,7 @@ from term_datasets.CL_RuTerm3 import (
 
 
 cnt = {}
-with open(CLRUTERM3_TRAIN1_CANDIDATES_PATH, 'r', encoding='utf-8-sig') as f:
+with open(r'C:\Users\Teisl\Desktop\test_candidate_2.jsonl', 'r', encoding='utf-8-sig') as f:
     for line in f:
         js = json.loads(line)
         candidates = js['candidates']
