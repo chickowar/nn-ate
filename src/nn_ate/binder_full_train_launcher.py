@@ -34,6 +34,7 @@ EVAL_DIRNAME = "checkpoint_eval"
 BEST_DIRNAME = "best_models"
 RECORDS_FILENAME = "checkpoint_scores.jsonl"
 GENERATED_CONFIG_FILENAME = "launcher_train_config.json"
+LAUNCHER_DIRNAME = "_launcher"
 
 
 @dataclass(frozen=True)
@@ -436,11 +437,12 @@ def run_training(generated_config_path: Path) -> subprocess.Popen[bytes]:
 
 def monitor_training_and_score(
     output_dir: Path,
+    launcher_dir: Path,
     generated_config_path: Path,
     args: argparse.Namespace,
 ) -> list[EvaluationRecord]:
     device_name = resolve_device_name(args.device)
-    records_path = output_dir / RECORDS_FILENAME
+    records_path = launcher_dir / RECORDS_FILENAME
     records = load_existing_records(records_path)
     seen = {record.checkpoint_name for record in records}
 
@@ -527,9 +529,11 @@ def main() -> None:
     base_config = load_json(args.base_config_path)
     output_dir = resolve_output_dir(base_config, args)
     output_dir.mkdir(parents=True, exist_ok=True)
+    launcher_dir = output_dir.parent / f"{output_dir.name}{LAUNCHER_DIRNAME}"
+    launcher_dir.mkdir(parents=True, exist_ok=True)
 
     generated_config = build_generated_config(base_config, args, output_dir)
-    generated_config_path = output_dir / GENERATED_CONFIG_FILENAME
+    generated_config_path = launcher_dir / GENERATED_CONFIG_FILENAME
     write_json(generated_config_path, generated_config)
 
     effective_train_batch = (
@@ -546,7 +550,12 @@ def main() -> None:
     print("test1_t1 file:", args.test_t1_file.expanduser().resolve())
     print("test1_t3 file:", args.test_t3_file.expanduser().resolve())
 
-    records = monitor_training_and_score(output_dir=output_dir, generated_config_path=generated_config_path, args=args)
+    records = monitor_training_and_score(
+        output_dir=output_dir,
+        launcher_dir=launcher_dir,
+        generated_config_path=generated_config_path,
+        args=args,
+    )
     maybe_update_best_snapshots(output_dir, records)
     if records:
         print_records_summary(records)
