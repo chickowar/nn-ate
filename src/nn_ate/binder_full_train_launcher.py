@@ -60,15 +60,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--train-file", type=Path, default=DEFAULT_TRAIN_FILE)
     parser.add_argument("--test-t1-file", type=Path, default=DEFAULT_TEST_T1_FILE)
     parser.add_argument("--test-t3-file", type=Path, default=DEFAULT_TEST_T3_FILE)
-    parser.add_argument("--num-train-epochs", type=int, default=128)
-    parser.add_argument("--learning-rate", type=float, default=3e-5)
+    parser.add_argument("--num-train-epochs", type=int, default=None)
+    parser.add_argument("--learning-rate", type=float, default=None)
     parser.add_argument("--per-device-train-batch-size", type=int, default=None)
-    parser.add_argument("--per-device-eval-batch-size", type=int, default=8)
-    parser.add_argument("--target-global-train-batch-size", type=int, default=8)
+    parser.add_argument("--per-device-eval-batch-size", type=int, default=None)
+    parser.add_argument("--target-global-train-batch-size", type=int, default=None)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=None)
-    parser.add_argument("--save-steps", type=int, default=100)
-    parser.add_argument("--save-total-limit", type=int, default=3)
-    parser.add_argument("--logging-steps", type=int, default=10)
+    parser.add_argument("--save-steps", type=int, default=None)
+    parser.add_argument("--save-total-limit", type=int, default=None)
+    parser.add_argument("--logging-steps", type=int, default=None)
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--poll-seconds", type=float, default=20.0)
     parser.add_argument("--skip-train", action="store_true")
@@ -102,6 +102,13 @@ def build_child_env(device_name: str, single_gpu: bool) -> dict[str, str]:
 
 
 def compute_batch_settings(args: argparse.Namespace, device_name: str) -> tuple[int, int]:
+    if (
+        args.target_global_train_batch_size is None
+        and args.per_device_train_batch_size is None
+        and args.gradient_accumulation_steps is None
+    ):
+        raise ValueError("Batch settings should be taken from config when no CLI overrides are provided.")
+
     if args.per_device_train_batch_size is not None and args.gradient_accumulation_steps is not None:
         return args.per_device_train_batch_size, args.gradient_accumulation_steps
 
@@ -154,7 +161,6 @@ def resolve_config_path_value(base_config_path: Path, value: str | None) -> str 
 
 def build_generated_config(base_config: dict[str, Any], args: argparse.Namespace, output_dir: Path) -> dict[str, Any]:
     device_name = resolve_device_name(args.device)
-    per_device_train_batch_size, gradient_accumulation_steps = compute_batch_settings(args, device_name)
 
     config = dict(base_config)
     config["train_file"] = str(args.train_file.expanduser().resolve())
@@ -169,18 +175,30 @@ def build_generated_config(base_config: dict[str, Any], args: argparse.Namespace
     ]:
         if path_key in config:
             config[path_key] = resolve_config_path_value(args.base_config_path, config.get(path_key))
-    config["num_train_epochs"] = args.num_train_epochs
-    config["learning_rate"] = args.learning_rate
-    config["per_device_train_batch_size"] = per_device_train_batch_size
-    config["per_device_eval_batch_size"] = args.per_device_eval_batch_size
-    config["gradient_accumulation_steps"] = (
-        args.gradient_accumulation_steps
-        if args.gradient_accumulation_steps is not None
-        else gradient_accumulation_steps
-    )
-    config["save_steps"] = args.save_steps
-    config["save_total_limit"] = args.save_total_limit
-    config["logging_steps"] = args.logging_steps
+    if args.num_train_epochs is not None:
+        config["num_train_epochs"] = args.num_train_epochs
+    if args.learning_rate is not None:
+        config["learning_rate"] = args.learning_rate
+    if (
+        args.target_global_train_batch_size is not None
+        or args.per_device_train_batch_size is not None
+        or args.gradient_accumulation_steps is not None
+    ):
+        per_device_train_batch_size, gradient_accumulation_steps = compute_batch_settings(args, device_name)
+        config["per_device_train_batch_size"] = per_device_train_batch_size
+        config["gradient_accumulation_steps"] = (
+            args.gradient_accumulation_steps
+            if args.gradient_accumulation_steps is not None
+            else gradient_accumulation_steps
+        )
+    if args.per_device_eval_batch_size is not None:
+        config["per_device_eval_batch_size"] = args.per_device_eval_batch_size
+    if args.save_steps is not None:
+        config["save_steps"] = args.save_steps
+    if args.save_total_limit is not None:
+        config["save_total_limit"] = args.save_total_limit
+    if args.logging_steps is not None:
+        config["logging_steps"] = args.logging_steps
     config["overwrite_output_dir"] = False
     config["do_train"] = True
     config["do_eval"] = False
