@@ -1,6 +1,3 @@
 [submodule "external/fulstock-binder"]
 	path = external/fulstock-binder
 	url = https://github.com/Chickowar/binder
-[submodule "external/fulstock-methods"]
-	path = external/fulstock-methods
-	url = https://github.com/Chickowar/Methods-for-Recognizing-Nested-Terms

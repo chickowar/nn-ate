@@ -9,6 +9,13 @@ class CLRuTerm3OriginalJSON(TypedDict):
     keywords: str
     candidates: NotRequired[list[list[int]]]
 
+class CLRuTerm3OutputJSON(TypedDict):
+    id: str
+    label: list[list[int]]
+    text: str
+    candidates: NotRequired[list[list[int]]]
+    candidate_probabilities: NotRequired[list[list[float]]]
+
 class RawDatasetElement(TypedDict):
     id: str
     label: list[list[int]] # list[tuple[int, int]]

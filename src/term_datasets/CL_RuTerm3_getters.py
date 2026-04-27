@@ -53,9 +53,9 @@ def get_raw_dataset(jsonl_path: Path | str, flat: bool = False) -> Dataset:
         "id": ids,
         "text": texts,
         "label": labels,
-    } | {
+    } | ({
         "candidates": candidates
-    } if candidates else {})
+    } if candidates else {}))
 
 
 def get_tokenized_dataset(

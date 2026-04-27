@@ -56,6 +56,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.set_defaults(has_preprocessed_candidates=None)
     parser.add_argument("--max-words-per-ngram", type=int, default=7)
     parser.add_argument("--per-device-batch-size", type=int, default=8)
+    parser.add_argument(
+        "--max-seq-length",
+        type=int,
+        default=None,
+        help="Override text max_seq_length for inference. Defaults to the value from binder config.",
+    )
+    parser.add_argument(
+        "--doc-stride",
+        type=int,
+        default=None,
+        help="Override doc_stride for inference. Defaults to the value from binder config.",
+    )
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda"])
     return parser
@@ -128,14 +140,41 @@ def load_entity_type_knowledge(
     entity_type_ids: list[str] = []
     entity_type_descs: list[str] = []
     with entity_type_file.open("r", encoding="utf-8") as file:
-        for line in file:
-            record = json.loads(line)
-            if record["dataset"] != dataset_name:
+        raw_content = file.read().strip()
+
+    if not raw_content:
+        raise ValueError(f"Entity type file is empty: {entity_type_file}")
+
+    try:
+        parsed = json.loads(raw_content)
+        if isinstance(parsed, dict):
+            records = [parsed]
+        elif isinstance(parsed, list):
+            records = parsed
+        else:
+            raise ValueError(
+                f"Unsupported JSON payload in {entity_type_file}: expected object or list, got {type(parsed).__name__}"
+            )
+    except json.JSONDecodeError:
+        records = []
+        for line_number, line in enumerate(raw_content.splitlines(), start=1):
+            stripped = line.strip()
+            if not stripped:
                 continue
-            if dataset_entity_types and record[entity_type_key_field] not in dataset_entity_types:
-                continue
-            entity_type_ids.append(record[entity_type_key_field])
-            entity_type_descs.append(record[entity_type_desc_field])
+            try:
+                records.append(json.loads(stripped))
+            except json.JSONDecodeError as error:
+                raise ValueError(
+                    f"Failed to parse entity type record at {entity_type_file}:{line_number}: {error}"
+                ) from error
+
+    for record in records:
+        if record["dataset"] != dataset_name:
+            continue
+        if dataset_entity_types and record[entity_type_key_field] not in dataset_entity_types:
+            continue
+        entity_type_ids.append(record[entity_type_key_field])
+        entity_type_descs.append(record[entity_type_desc_field])
     if not entity_type_ids:
         raise ValueError(f"No entity types found for dataset={dataset_name} in {entity_type_file}")
     return entity_type_ids, entity_type_descs
@@ -366,6 +405,14 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(str(model_path), use_fast=True)
 
     model = load_binder_checkpoint(model_path, device)
+    requested_max_seq_length = args.max_seq_length or binder_run_config.get("max_seq_length", 192)
+    effective_max_seq_length = min(requested_max_seq_length, tokenizer.model_max_length)
+    effective_doc_stride = args.doc_stride or binder_run_config.get("doc_stride", 16)
+    if effective_max_seq_length != requested_max_seq_length:
+        print(
+            f"Requested max_seq_length={requested_max_seq_length} exceeds tokenizer limit "
+            f"{tokenizer.model_max_length}; using {effective_max_seq_length} instead."
+        )
 
     entity_type_ids, entity_type_descs = load_entity_type_knowledge(
         entity_type_file=Path(entity_type_file),
@@ -392,8 +439,8 @@ def main() -> None:
         tokenizer=tokenizer,
         has_preprocessed_candidates=has_preprocessed_candidates,
         max_words_per_ngram=args.max_words_per_ngram,
-        max_seq_length=binder_run_config.get("max_seq_length", 192),
-        doc_stride=binder_run_config.get("doc_stride", 16),
+        max_seq_length=effective_max_seq_length,
+        doc_stride=effective_doc_stride,
         max_span_length=binder_run_config.get("max_span_length", 30),
     )
 
@@ -443,6 +490,8 @@ def main() -> None:
         "Candidate source:",
         "preprocessed candidates/candidates" if has_preprocessed_candidates else "local n-gram extraction",
     )
+    print("Inference max_seq_length:", effective_max_seq_length)
+    print("Inference doc_stride:", effective_doc_stride)
     print("Entity types used:", entity_type_ids)
 
 
