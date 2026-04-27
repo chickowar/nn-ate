@@ -73,6 +73,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--poll-seconds", type=float, default=20.0)
     parser.add_argument("--skip-train", action="store_true")
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
+    parser.add_argument("--single-gpu", action="store_true", default=True)
+    parser.add_argument("--allow-multi-gpu", dest="single_gpu", action="store_false")
     return parser
 
 
@@ -82,10 +84,21 @@ def resolve_device_name(name: str) -> str:
     return name
 
 
-def resolve_num_devices(device_name: str) -> int:
+def resolve_num_devices(device_name: str, single_gpu: bool = False) -> int:
     if device_name != "cuda" or not torch.cuda.is_available():
         return 1
+    if single_gpu:
+        return 1
     return max(1, torch.cuda.device_count())
+
+
+def build_child_env(device_name: str, single_gpu: bool) -> dict[str, str]:
+    env = dict(os.environ)
+    existing_pythonpath = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = str(SRC_ROOT) if not existing_pythonpath else str(SRC_ROOT) + os.pathsep + existing_pythonpath
+    if device_name == "cuda" and single_gpu:
+        env["CUDA_VISIBLE_DEVICES"] = "0"
+    return env
 
 
 def compute_batch_settings(args: argparse.Namespace, device_name: str) -> tuple[int, int]:
@@ -93,12 +106,12 @@ def compute_batch_settings(args: argparse.Namespace, device_name: str) -> tuple[
         return args.per_device_train_batch_size, args.gradient_accumulation_steps
 
     if args.per_device_train_batch_size is not None:
-        num_devices = resolve_num_devices(device_name)
+        num_devices = resolve_num_devices(device_name, single_gpu=args.single_gpu)
         global_batch = args.per_device_train_batch_size * num_devices
         gradient_accumulation_steps = max(1, math.ceil(args.target_global_train_batch_size / global_batch))
         return args.per_device_train_batch_size, gradient_accumulation_steps
 
-    num_devices = resolve_num_devices(device_name)
+    num_devices = resolve_num_devices(device_name, single_gpu=args.single_gpu)
     per_device = max(1, math.ceil(args.target_global_train_batch_size / num_devices))
     effective_global = per_device * num_devices
     gradient_accumulation_steps = max(1, math.ceil(args.target_global_train_batch_size / effective_global))
@@ -268,10 +281,9 @@ def run_prediction(
     output_path: Path,
     threshold: float,
     device_name: str,
+    single_gpu: bool,
 ) -> None:
-    env = dict(os.environ)
-    existing_pythonpath = env.get("PYTHONPATH")
-    env["PYTHONPATH"] = str(SRC_ROOT) if not existing_pythonpath else str(SRC_ROOT) + os.pathsep + existing_pythonpath
+    env = build_child_env(device_name=device_name, single_gpu=single_gpu)
     command = [
         sys.executable,
         str(PROJECT_ROOT / "src" / "nn_ate" / "binder_predict.py"),
@@ -300,6 +312,7 @@ def evaluate_checkpoint(
     test_t3_file: Path,
     threshold: float,
     device_name: str,
+    single_gpu: bool,
 ) -> EvaluationRecord:
     eval_dir = output_dir / EVAL_DIRNAME / checkpoint_name
     eval_dir.mkdir(parents=True, exist_ok=True)
@@ -314,6 +327,7 @@ def evaluate_checkpoint(
         output_path=t1_pred_path,
         threshold=threshold,
         device_name=device_name,
+        single_gpu=single_gpu,
     )
     run_prediction(
         model_path=checkpoint_path,
@@ -322,6 +336,7 @@ def evaluate_checkpoint(
         output_path=t3_pred_path,
         threshold=threshold,
         device_name=device_name,
+        single_gpu=single_gpu,
     )
 
     t1_metrics = evaluate_track1(
@@ -447,13 +462,14 @@ def print_records_summary(records: list[EvaluationRecord]) -> None:
     print(f"Best test1_t3: step={format_step(best_t3)} score={float(best_t3.test_t3['score']):.6f}")
 
 
-def run_training(generated_config_path: Path) -> subprocess.Popen[bytes]:
+def run_training(generated_config_path: Path, device_name: str, single_gpu: bool) -> subprocess.Popen[bytes]:
+    env = build_child_env(device_name=device_name, single_gpu=single_gpu)
     command = [
         sys.executable,
         str(BINDER_ROOT / "run_ner.py"),
         str(generated_config_path),
     ]
-    return subprocess.Popen(command, cwd=BINDER_ROOT)
+    return subprocess.Popen(command, cwd=BINDER_ROOT, env=env)
 
 
 def monitor_training_and_score(
@@ -469,7 +485,11 @@ def monitor_training_and_score(
 
     process: subprocess.Popen[bytes] | None = None
     if not args.skip_train:
-        process = run_training(generated_config_path)
+        process = run_training(
+            generated_config_path=generated_config_path,
+            device_name=device_name,
+            single_gpu=args.single_gpu,
+        )
 
     try:
         while True:
@@ -487,6 +507,7 @@ def monitor_training_and_score(
                         test_t3_file=args.test_t3_file.expanduser().resolve(),
                         threshold=args.threshold,
                         device_name=device_name,
+                        single_gpu=args.single_gpu,
                     )
                 except Exception as error:
                     print(f"Checkpoint {checkpoint_name} is not ready for scoring yet: {error}")
@@ -516,6 +537,7 @@ def monitor_training_and_score(
                             test_t3_file=args.test_t3_file.expanduser().resolve(),
                             threshold=args.threshold,
                             device_name=device_name,
+                            single_gpu=args.single_gpu,
                         )
                         records.append(record)
                         append_record(records_path, record)
@@ -559,7 +581,7 @@ def main() -> None:
 
     effective_train_batch = (
         int(generated_config["per_device_train_batch_size"])
-        * resolve_num_devices(resolve_device_name(args.device))
+        * resolve_num_devices(resolve_device_name(args.device), single_gpu=args.single_gpu)
         * int(generated_config["gradient_accumulation_steps"])
     )
     print("Generated train config:", generated_config_path)
