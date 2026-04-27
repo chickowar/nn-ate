@@ -128,6 +128,17 @@ def resolve_output_dir(base_config: dict[str, Any], args: argparse.Namespace) ->
     return output_dir_path
 
 
+def resolve_config_path_value(base_config_path: Path, value: str | None) -> str | None:
+    if not value:
+        return value
+    value_path = Path(value)
+    if value_path.is_absolute():
+        return str(value_path)
+    if "/" in value and not any(prefix in value for prefix in ("./", ".\\", "../", "..\\")):
+        return value
+    return str((base_config_path.parent / value_path).resolve())
+
+
 def build_generated_config(base_config: dict[str, Any], args: argparse.Namespace, output_dir: Path) -> dict[str, Any]:
     device_name = resolve_device_name(args.device)
     per_device_train_batch_size, gradient_accumulation_steps = compute_batch_settings(args, device_name)
@@ -135,6 +146,16 @@ def build_generated_config(base_config: dict[str, Any], args: argparse.Namespace
     config = dict(base_config)
     config["train_file"] = str(args.train_file.expanduser().resolve())
     config["output_dir"] = str(output_dir)
+    for path_key in [
+        "entity_type_file",
+        "cache_dir",
+        "logging_dir",
+        "binder_model_name_or_path",
+        "config_name",
+        "tokenizer_name",
+    ]:
+        if path_key in config:
+            config[path_key] = resolve_config_path_value(args.base_config_path, config.get(path_key))
     config["num_train_epochs"] = args.num_train_epochs
     config["learning_rate"] = args.learning_rate
     config["per_device_train_batch_size"] = per_device_train_batch_size
