@@ -379,19 +379,27 @@ def evaluate_checkpoint(
 
 
 def copy_model_snapshot(source: Path, destination: Path) -> None:
+    keep_filenames = {
+        "config.json",
+        "model.safetensors",
+        "pytorch_model.bin",
+        "special_tokens_map.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "vocab.json",
+        "merges.txt",
+        "sentencepiece.bpe.model",
+        "spiece.model",
+    }
+
     if destination.exists():
         shutil.rmtree(destination)
+    destination.mkdir(parents=True, exist_ok=True)
 
-    if source.name.startswith("checkpoint-"):
-        shutil.copytree(source, destination)
-        return
-
-    def _ignore(_directory: str, names: list[str]) -> set[str]:
-        ignored = {name for name in names if name.startswith("checkpoint-")}
-        ignored.update({EVAL_DIRNAME, BEST_DIRNAME, "__pycache__"})
-        return ignored
-
-    shutil.copytree(source, destination, ignore=_ignore)
+    for name in keep_filenames:
+        source_path = source / name
+        if source_path.exists() and source_path.is_file():
+            shutil.copy2(source_path, destination / name)
 
 
 def maybe_update_best_snapshots(output_dir: Path, records: list[EvaluationRecord]) -> None:
