@@ -14,7 +14,6 @@ from statistics import mean
 from typing import Any
 
 import torch
-from torch.utils.tensorboard import SummaryWriter
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SRC_ROOT = PROJECT_ROOT / "src"
@@ -25,10 +24,7 @@ from common.rutermeval_score import compute_f1, evaluate_track1, load_jsonl
 
 BINDER_ROOT = PROJECT_ROOT / "external" / "fulstock-binder"
 DEFAULT_BASE_CONFIG_PATH = (
-    BINDER_ROOT
-    / "conf"
-    / "NN_ATE"
-    / "track1_candidates_fulltrain_deeppavlov_rubert_base_lr2e-05_bs8_ep80_seed34.json"
+    BINDER_ROOT / "conf" / "NN_ATE" / "track1_candidates_fulltrain_ruroberta_large_lr3e-05_bs8_ep128.json"
 )
 DEFAULT_TRAIN_FILE = PROJECT_ROOT / "data" / "CL-RuTerm3" / "processed" / "train_t1_candidates.jsonl"
 DEFAULT_TEST_T1_FILE = PROJECT_ROOT / "data" / "CL-RuTerm3" / "processed" / "test1_t1_candidates.jsonl"
@@ -39,7 +35,6 @@ BEST_DIRNAME = "best_models"
 RECORDS_FILENAME = "checkpoint_scores.jsonl"
 GENERATED_CONFIG_FILENAME = "launcher_train_config.json"
 LAUNCHER_DIRNAME = "_launcher"
-TENSORBOARD_DIRNAME = "tensorboard_eval"
 
 
 @dataclass(frozen=True)
@@ -55,8 +50,8 @@ class EvaluationRecord:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Run local full-train BINDER on train_t1_candidates, score checkpoints on test1_t1 and test1_t3, "
-            "and write those external validation metrics into TensorBoard."
+            "Run full-train BINDER on train_t1_candidates, score each checkpoint on test1_t1 and test1_t3, "
+            "and snapshot the best checkpoints for both metrics."
         )
     )
     parser.add_argument("--base-config-path", type=Path, default=DEFAULT_BASE_CONFIG_PATH)
@@ -65,7 +60,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--train-file", type=Path, default=DEFAULT_TRAIN_FILE)
     parser.add_argument("--test-t1-file", type=Path, default=DEFAULT_TEST_T1_FILE)
     parser.add_argument("--test-t3-file", type=Path, default=DEFAULT_TEST_T3_FILE)
-    parser.add_argument("--tensorboard-log-dir", type=Path, default=None)
     parser.add_argument("--num-train-epochs", type=int, default=None)
     parser.add_argument("--learning-rate", type=float, default=None)
     parser.add_argument("--per-device-train-batch-size", type=int, default=None)
@@ -152,17 +146,6 @@ def resolve_output_dir(base_config: dict[str, Any], args: argparse.Namespace) ->
     if not output_dir_path.is_absolute():
         output_dir_path = (args.base_config_path.parent / output_dir_path).resolve()
     return output_dir_path
-
-
-def resolve_tensorboard_log_dir(
-    output_dir: Path,
-    launcher_dir: Path,
-    generated_config: dict[str, Any],
-    args: argparse.Namespace,
-) -> Path:
-    if args.tensorboard_log_dir is not None:
-        return args.tensorboard_log_dir.expanduser().resolve()
-    return launcher_dir / TENSORBOARD_DIRNAME
 
 
 def resolve_config_path_value(base_config_path: Path, value: str | None) -> str | None:
@@ -505,33 +488,6 @@ def print_records_summary(records: list[EvaluationRecord]) -> None:
     print(f"Best test1_t3: step={format_step(best_t3)} score={float(best_t3.test_t3['score']):.6f}")
 
 
-def log_record_to_tensorboard(writer: SummaryWriter, record: EvaluationRecord) -> None:
-    step = record.global_step if record.global_step is not None else 0
-    writer.add_scalar("external_eval/test1_t1/score", float(record.test_t1["score"]), step)
-    writer.add_scalar(
-        "external_eval/test1_t1/abstracts_macro_f1",
-        float(record.test_t1["abstracts_macro_f1"]),
-        step,
-    )
-    writer.add_scalar(
-        "external_eval/test1_t1/full_texts_macro_f1",
-        float(record.test_t1["full_texts_macro_f1"]),
-        step,
-    )
-    writer.add_scalar("external_eval/test1_t3/score", float(record.test_t3["score"]), step)
-    writer.add_scalar("external_eval/test1_t3/doc_macro_f1", float(record.test_t3["doc_macro_f1"]), step)
-    writer.flush()
-
-
-def sync_existing_records_to_tensorboard(writer: SummaryWriter, records: list[EvaluationRecord]) -> None:
-    ordered_records = sorted(
-        records,
-        key=lambda record: (record.global_step is None, record.global_step if record.global_step is not None else 10**18),
-    )
-    for record in ordered_records:
-        log_record_to_tensorboard(writer, record)
-
-
 def run_training(generated_config_path: Path, device_name: str, single_gpu: bool) -> subprocess.Popen[bytes]:
     env = build_child_env(device_name=device_name, single_gpu=single_gpu)
     command = [
@@ -546,7 +502,6 @@ def monitor_training_and_score(
     output_dir: Path,
     launcher_dir: Path,
     generated_config_path: Path,
-    tensorboard_log_dir: Path,
     args: argparse.Namespace,
 ) -> list[EvaluationRecord]:
     device_name = resolve_device_name(args.device)
@@ -562,16 +517,43 @@ def monitor_training_and_score(
             single_gpu=args.single_gpu,
         )
 
-    tensorboard_log_dir.mkdir(parents=True, exist_ok=True)
-    with SummaryWriter(log_dir=str(tensorboard_log_dir)) as writer:
-        sync_existing_records_to_tensorboard(writer, records)
-        try:
-            while True:
-                had_new_record = False
-                for checkpoint_name, checkpoint_path in iter_candidate_model_dirs(output_dir, include_final=False):
-                    if checkpoint_name in seen:
-                        continue
-                    try:
+    try:
+        while True:
+            had_new_record = False
+            for checkpoint_name, checkpoint_path in iter_candidate_model_dirs(output_dir, include_final=False):
+                if checkpoint_name in seen:
+                    continue
+                try:
+                    record = evaluate_checkpoint(
+                        checkpoint_name=checkpoint_name,
+                        checkpoint_path=checkpoint_path,
+                        generated_config_path=generated_config_path,
+                        output_dir=output_dir,
+                        test_t1_file=args.test_t1_file.expanduser().resolve(),
+                        test_t3_file=args.test_t3_file.expanduser().resolve(),
+                        threshold=args.threshold,
+                        device_name=device_name,
+                        single_gpu=args.single_gpu,
+                    )
+                except Exception as error:
+                    print(f"Checkpoint {checkpoint_name} is not ready for scoring yet: {error}")
+                    continue
+                records.append(record)
+                append_record(records_path, record)
+                seen.add(checkpoint_name)
+                maybe_update_best_snapshots(output_dir, records)
+                print_records_summary(records)
+                had_new_record = True
+
+            if process is None:
+                break
+
+            return_code = process.poll()
+            if return_code is not None:
+                if not had_new_record:
+                    for checkpoint_name, checkpoint_path in iter_candidate_model_dirs(output_dir, include_final=True):
+                        if checkpoint_name in seen:
+                            continue
                         record = evaluate_checkpoint(
                             checkpoint_name=checkpoint_name,
                             checkpoint_path=checkpoint_path,
@@ -583,52 +565,20 @@ def monitor_training_and_score(
                             device_name=device_name,
                             single_gpu=args.single_gpu,
                         )
-                    except Exception as error:
-                        print(f"Checkpoint {checkpoint_name} is not ready for scoring yet: {error}")
-                        continue
-                    records.append(record)
-                    append_record(records_path, record)
-                    seen.add(checkpoint_name)
-                    log_record_to_tensorboard(writer, record)
+                        records.append(record)
+                        append_record(records_path, record)
+                        seen.add(checkpoint_name)
                     maybe_update_best_snapshots(output_dir, records)
-                    print_records_summary(records)
-                    had_new_record = True
+                    if records:
+                        print_records_summary(records)
+                if return_code != 0:
+                    raise subprocess.CalledProcessError(return_code, process.args)
+                break
 
-                if process is None:
-                    break
-
-                return_code = process.poll()
-                if return_code is not None:
-                    if not had_new_record:
-                        for checkpoint_name, checkpoint_path in iter_candidate_model_dirs(output_dir, include_final=True):
-                            if checkpoint_name in seen:
-                                continue
-                            record = evaluate_checkpoint(
-                                checkpoint_name=checkpoint_name,
-                                checkpoint_path=checkpoint_path,
-                                generated_config_path=generated_config_path,
-                                output_dir=output_dir,
-                                test_t1_file=args.test_t1_file.expanduser().resolve(),
-                                test_t3_file=args.test_t3_file.expanduser().resolve(),
-                                threshold=args.threshold,
-                                device_name=device_name,
-                                single_gpu=args.single_gpu,
-                            )
-                            records.append(record)
-                            append_record(records_path, record)
-                            seen.add(checkpoint_name)
-                            log_record_to_tensorboard(writer, record)
-                        maybe_update_best_snapshots(output_dir, records)
-                        if records:
-                            print_records_summary(records)
-                    if return_code != 0:
-                        raise subprocess.CalledProcessError(return_code, process.args)
-                    break
-
-                time.sleep(max(1.0, args.poll_seconds))
-        finally:
-            if process is not None and process.poll() is None:
-                process.terminate()
+            time.sleep(max(1.0, args.poll_seconds))
+    finally:
+        if process is not None and process.poll() is None:
+            process.terminate()
 
     return records
 
@@ -647,18 +597,13 @@ def main() -> None:
 
     base_config = load_json(args.base_config_path)
     output_dir = resolve_output_dir(base_config, args)
+    output_dir.mkdir(parents=True, exist_ok=True)
     launcher_dir = output_dir.parent / f"{output_dir.name}{LAUNCHER_DIRNAME}"
     launcher_dir.mkdir(parents=True, exist_ok=True)
 
     generated_config = build_generated_config(base_config, args, output_dir)
     generated_config_path = launcher_dir / GENERATED_CONFIG_FILENAME
     write_json(generated_config_path, generated_config)
-    tensorboard_log_dir = resolve_tensorboard_log_dir(
-        output_dir=output_dir,
-        launcher_dir=launcher_dir,
-        generated_config=generated_config,
-        args=args,
-    )
 
     effective_train_batch = (
         int(generated_config["per_device_train_batch_size"])
@@ -667,7 +612,6 @@ def main() -> None:
     )
     print("Generated train config:", generated_config_path)
     print("Output dir:", output_dir)
-    print("TensorBoard log dir:", tensorboard_log_dir)
     print("Per-device train batch size:", generated_config["per_device_train_batch_size"])
     print("Gradient accumulation steps:", generated_config["gradient_accumulation_steps"])
     print("Effective global train batch size:", effective_train_batch)
@@ -679,7 +623,6 @@ def main() -> None:
         output_dir=output_dir,
         launcher_dir=launcher_dir,
         generated_config_path=generated_config_path,
-        tensorboard_log_dir=tensorboard_log_dir,
         args=args,
     )
     maybe_update_best_snapshots(output_dir, records)
