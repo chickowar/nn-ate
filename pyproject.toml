@@ -26,6 +26,7 @@ packages = [
     {include = "nn_ate", from = "src"},
     {include = "common", from = "src"},
     {include = "term_datasets", from = "src"},
+    {include = "augmentations", from = "src"},
 ]
 
 [[tool.poetry.source]]

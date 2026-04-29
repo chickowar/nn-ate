@@ -4,9 +4,9 @@ from typing import TypedDict, Mapping, NotRequired
 
 class CLRuTerm3OriginalJSON(TypedDict):
     id: str
-    label: list[list[int]]
     text: str
-    keywords: str
+    keywords: NotRequired[str]
+    label: NotRequired[list[list[int]]]
     candidates: NotRequired[list[list[int]]]
 
 class CLRuTerm3OutputJSON(TypedDict):

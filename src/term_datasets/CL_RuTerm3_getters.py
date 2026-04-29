@@ -42,18 +42,19 @@ def get_raw_dataset(jsonl_path: Path | str, flat: bool = False) -> Dataset:
     with open(jsonl_path, "r", encoding="utf-8-sig") as f:
         for line in f:
             js: CLRuTerm3OriginalJSON = json.loads(line)
-            labels.append(js["label"])
-            if flat:
-                labels[-1] = get_flat_terms(labels[-1])
             texts.append(js["text"])
             ids.append(js["id"])
             if 'candidates' in js:
                 candidates.append(js["candidates"])
+            if 'label' in js:
+                labels.append(js["label"])
+                if flat:
+                    labels[-1] = get_flat_terms(labels[-1])
     return Dataset.from_dict({
         "id": ids,
         "text": texts,
-        "label": labels,
     } | ({
+        "label": labels,
         "candidates": candidates
     } if candidates else {}))
 

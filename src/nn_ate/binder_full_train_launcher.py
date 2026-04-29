@@ -62,9 +62,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-config-path", type=Path, default=DEFAULT_BASE_CONFIG_PATH)
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--run-name", type=str, default=None)
-    parser.add_argument("--train-file", type=Path, default=DEFAULT_TRAIN_FILE)
-    parser.add_argument("--test-t1-file", type=Path, default=DEFAULT_TEST_T1_FILE)
-    parser.add_argument("--test-t3-file", type=Path, default=DEFAULT_TEST_T3_FILE)
+    parser.add_argument("--train-file", type=Path, default=None)
+    parser.add_argument("--test-t1-file", type=Path, default=None)
+    parser.add_argument("--test-t3-file", type=Path, default=None)
     parser.add_argument("--tensorboard-log-dir", type=Path, default=None)
     parser.add_argument("--num-train-epochs", type=int, default=None)
     parser.add_argument("--learning-rate", type=float, default=None)
@@ -174,6 +174,25 @@ def resolve_config_path_value(base_config_path: Path, value: str | None) -> str 
     if "/" in value and not any(prefix in value for prefix in ("./", ".\\", "../", "..\\")):
         return value
     return str((base_config_path.parent / value_path).resolve())
+
+
+def resolve_dataset_path(
+    cli_value: Path | None,
+    base_config: dict[str, Any],
+    config_key: str,
+    default_value: Path,
+    base_config_path: Path,
+) -> Path:
+    if cli_value is not None:
+        return cli_value.expanduser().resolve()
+
+    config_value = base_config.get(config_key)
+    if isinstance(config_value, str) and config_value:
+        resolved = resolve_config_path_value(base_config_path, config_value)
+        if resolved is not None:
+            return Path(resolved).expanduser().resolve()
+
+    return default_value.expanduser().resolve()
 
 
 def build_generated_config(base_config: dict[str, Any], args: argparse.Namespace, output_dir: Path) -> dict[str, Any]:
@@ -638,6 +657,30 @@ def main() -> None:
 
     if not args.base_config_path.exists():
         raise FileNotFoundError(f"Base config not found: {args.base_config_path}")
+
+    base_config = load_json(args.base_config_path)
+    args.train_file = resolve_dataset_path(
+        cli_value=args.train_file,
+        base_config=base_config,
+        config_key="train_file",
+        default_value=DEFAULT_TRAIN_FILE,
+        base_config_path=args.base_config_path,
+    )
+    args.test_t1_file = resolve_dataset_path(
+        cli_value=args.test_t1_file,
+        base_config=base_config,
+        config_key="test_t1_file",
+        default_value=DEFAULT_TEST_T1_FILE,
+        base_config_path=args.base_config_path,
+    )
+    args.test_t3_file = resolve_dataset_path(
+        cli_value=args.test_t3_file,
+        base_config=base_config,
+        config_key="test_t3_file",
+        default_value=DEFAULT_TEST_T3_FILE,
+        base_config_path=args.base_config_path,
+    )
+
     if not args.train_file.exists():
         raise FileNotFoundError(f"Train file not found: {args.train_file}")
     if not args.test_t1_file.exists():
@@ -645,7 +688,6 @@ def main() -> None:
     if not args.test_t3_file.exists():
         raise FileNotFoundError(f"test1_t3 file not found: {args.test_t3_file}")
 
-    base_config = load_json(args.base_config_path)
     output_dir = resolve_output_dir(base_config, args)
     launcher_dir = output_dir.parent / f"{output_dir.name}{LAUNCHER_DIRNAME}"
     launcher_dir.mkdir(parents=True, exist_ok=True)
