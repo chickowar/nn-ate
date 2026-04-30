@@ -338,6 +338,9 @@ def run_prediction(
     single_gpu: bool,
 ) -> None:
     env = build_child_env(device_name=device_name, single_gpu=single_gpu)
+    binder_run_config = load_json(binder_config_path)
+    candidate_spans_field = binder_run_config.get("candidate_spans_field")
+    max_words_per_ngram = binder_run_config.get("max_words_per_ngram")
     command = [
         sys.executable,
         str(PROJECT_ROOT / "src" / "nn_ate" / "binder_predict.py"),
@@ -354,6 +357,12 @@ def run_prediction(
         "--device",
         device_name,
     ]
+    if candidate_spans_field:
+        command.append("--has-preprocessed-candidates")
+    else:
+        command.append("--no-preprocessed-candidates")
+        if max_words_per_ngram is not None:
+            command.extend(["--max-words-per-ngram", str(int(max_words_per_ngram))])
     subprocess.run(command, cwd=PROJECT_ROOT, check=True, env=env)
 
 

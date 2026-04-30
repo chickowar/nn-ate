@@ -54,7 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Ignore candidates column and build candidates locally.",
     )
     parser.set_defaults(has_preprocessed_candidates=None)
-    parser.add_argument("--max-words-per-ngram", type=int, default=7)
+    parser.add_argument("--max-words-per-ngram", type=int, default=None)
     parser.add_argument("--per-device-batch-size", type=int, default=8)
     parser.add_argument(
         "--max-seq-length",
@@ -434,11 +434,17 @@ def main() -> None:
     if "token_type_ids" in tokenized_descriptions:
         type_inputs["token_type_ids"] = torch.tensor(tokenized_descriptions["token_type_ids"], dtype=torch.long)
 
+    effective_max_words_per_ngram = (
+        args.max_words_per_ngram
+        if args.max_words_per_ngram is not None
+        else int(binder_run_config.get("max_words_per_ngram", 7))
+    )
+
     features, candidates_by_id = prepare_features(
         raw_dataset=raw_dataset,
         tokenizer=tokenizer,
         has_preprocessed_candidates=has_preprocessed_candidates,
-        max_words_per_ngram=args.max_words_per_ngram,
+        max_words_per_ngram=effective_max_words_per_ngram,
         max_seq_length=effective_max_seq_length,
         doc_stride=effective_doc_stride,
         max_span_length=binder_run_config.get("max_span_length", 30),
@@ -490,6 +496,7 @@ def main() -> None:
         "Candidate source:",
         "preprocessed candidates/candidates" if has_preprocessed_candidates else "local n-gram extraction",
     )
+    print("max_words_per_ngram:", effective_max_words_per_ngram)
     print("Inference max_seq_length:", effective_max_seq_length)
     print("Inference doc_stride:", effective_doc_stride)
     print("Entity types used:", entity_type_ids)

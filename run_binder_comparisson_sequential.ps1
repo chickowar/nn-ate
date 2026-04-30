@@ -8,7 +8,7 @@ $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $launcherPath = Join-Path $projectRoot "src\nn_ate\binder_full_train_launcher.py"
 $firstConfigPath = Join-Path $projectRoot "external\fulstock-binder\conf\NN_ATE\track1_comparisson_fulltrain_deeppavlov_rubert_base_ep15_candpre_seed34.json"
-$secondConfigPath = Join-Path $projectRoot "external\fulstock-binder\conf\NN_ATE\track1_comparisson_fulltrain_deeppavlov_rubert_base_ep15_ng10all_seed34.json"
+$secondConfigPath = Join-Path $projectRoot "external\fulstock-binder\conf\NN_ATE\track1_comparisson_fulltrain_deeppavlov_rubert_base_ep15_ng10_nocands_seed34.json"
 
 function Invoke-BinderRun {
     param(
@@ -37,7 +37,7 @@ try {
     }
 
     if (-not $SkipSecond) {
-        Invoke-BinderRun -Label "BINDER ng10all comparison run" -ConfigPath $secondConfigPath
+        Invoke-BinderRun -Label "BINDER ng10 no-candidates comparison run" -ConfigPath $secondConfigPath
     }
 }
 finally {
